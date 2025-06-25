@@ -5,12 +5,8 @@ package main
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"time"
@@ -28,7 +24,7 @@ var pluginCore = &PluginCore{
 }
 
 type PluginCore struct {
-	encryption *EncryptionStore
+	encryption *EncryptionUtil
 	tokens     map[string]bool
 }
 
@@ -36,12 +32,10 @@ func main() {
 
 	var err error
 
-	fmt.Println("Initializing Vault Auth Plugin...")
-
 	pluginCore, err = initPlugin()
 
 	if err != nil {
-		fmt.Println("Error initializing plugin core:", err)
+		fmt.Println("Error initializing plugin:", err)
 		os.Exit(1)
 	}
 
@@ -69,23 +63,23 @@ func initPlugin() (*PluginCore, error) {
 
 	encryption := NewEncryptionStore()
 
-	fmt.Println("Generating plugin config...")
-
 	count := 3
 	tokenMap := make(map[string]bool)
 
-	filePath := os.Getenv("PLUGIN_CONFIG_PATH")
+	tempToken := make(map[string]bool)
+
+	filePath := os.Getenv("PLUGIN_OUT_PATH")
 	if filePath == "" {
-		return nil, errors.New("PLUGIN_CONFIG_PATH environment variable is not set")
+		log.Fatal(errors.New("PLUGIN_OUT_PATH environment variable is not set"))
+		return nil, errors.New("PLUGIN_OUT_PATH environment variable is not set")
 	}
 	f, err := os.Create(filePath)
 	if err != nil {
+		log.Fatal(fmt.Errorf("failed to create file %s: %w", filePath, err))
 		return nil, err
 	}
 
 	defer f.Close()
-
-	fmt.Println("Creating plugin config file at:", filePath)
 
 	for count > 0 {
 		token := uuid.NewString()
@@ -94,11 +88,13 @@ func initPlugin() (*PluginCore, error) {
 			return nil, err
 		}
 
-		fmt.Println("Generated token:", token)
+		tempToken[token] = true
 
 		encryptedToken, err := encryption.Encrypt([]byte(token))
 
-		fmt.Println("Encrypted token:", string(encryptedToken))
+		if err != nil {
+			return nil, err
+		}
 
 		tokenMap[string(encryptedToken)] = true
 		count--
@@ -109,60 +105,6 @@ func initPlugin() (*PluginCore, error) {
 		tokens:     tokenMap,
 	}, nil
 }
-
-// func generatePluginConfig() (*PluginConfig, error) {
-
-// 	count := 3
-// 	tokenMap := make(map[string]bool)
-
-// 	filePath := os.Getenv("PLUGIN_CONFIG_PATH")
-// 	if filePath == "" {
-// 		return nil, errors.New("PLUGIN_CONFIG_PATH environment variable is not set")
-// 	}
-// 	f, err := os.Create(filePath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	defer f.Close()
-
-// 	for count > 0 {
-// 		token := uuid.NewString()
-// 		tokenMap[token] = true
-// 		_, err := f.WriteString(token + "\n")
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 	}
-
-// 	return &PluginConfig{
-// 		tokens: tokenMap,
-// 	}, nil
-
-// }
-
-// func readPluginConfig() (*PluginConfig, error) {
-
-// 	filePath := os.Getenv("PLUGIN_CONFIG_PATH")
-// 	if filePath == "" {
-// 		return nil, errors.New("PLUGIN_CONFIG_PATH environment variable is not set")
-// 	}
-
-// 	viper.SetConfigFile(filePath)
-// 	viper.SetConfigType("json")
-// 	if err := viper.ReadInConfig(); err != nil {
-// 		return nil, err
-// 	}
-
-// 	tokenList := viper.GetStringSlice("tokens")
-// 	tokenMap := make(map[string]bool, len(tokenList))
-// 	for _, token := range tokenList {
-// 		tokenMap[token] = true
-// 	}
-// 	return &PluginConfig{
-// 		tokens: tokenMap,
-// 	}, nil
-// }
 
 func Factory(ctx context.Context, c *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend(c)
@@ -198,7 +140,7 @@ func Backend(c *logical.BackendConfig) *backend {
 				},
 			},
 		},
-		RunningVersion: "v1.0.0",
+		RunningVersion: "v0.2.0",
 	}
 
 	return &b
@@ -209,19 +151,7 @@ func (b *backend) pathAuthLogin(_ context.Context, req *logical.Request, d *fram
 
 	password := d.Get("password").(string)
 
-	f, err := os.Create("/Users/muraliparthasarathy/work/projects/vault-auth-plugin-example/cmd/vault-auth-plugin-example/plugin.log")
-
-	if err != nil {
-		b.Logger().Error("failed to create log file", "err", err)
-		return nil, err
-	}
-
-	f.WriteString("checking password: " + password + "\n")
-	f.WriteString("plugin config tokens: " + fmt.Sprintf("%v", pluginCore.tokens) + "\n")
-
-	encryptedPassword, err := pluginCore.encryption.Encrypt([]byte(password))
-
-	f.WriteString("plugin config encrypted tokens: " + string(encryptedPassword) + "\n")
+	encryptedPassword, _ := pluginCore.encryption.Encrypt([]byte(password))
 
 	if !pluginCore.tokens[string(encryptedPassword)] {
 		b.Logger().Error("login failed", "err", logical.ErrPermissionDenied.Error())
@@ -264,61 +194,4 @@ func (b *backend) pathAuthRenew(ctx context.Context, req *logical.Request, d *fr
 	}
 
 	return framework.LeaseExtend(30*time.Second, 60*time.Minute, b.System())(ctx, req, d)
-}
-
-type EncryptionStore struct {
-	key   []byte
-	nonce []byte
-}
-
-func NewEncryptionStore() *EncryptionStore {
-
-	key := make([]byte, 32)
-	// Never use more than 2^32 random nonces with a given key because of the risk of a repeat.
-	nonce := make([]byte, 12)
-
-	return &EncryptionStore{
-		key:   key,
-		nonce: nonce,
-	}
-}
-
-func (es *EncryptionStore) Encrypt(data []byte) ([]byte, error) {
-
-	block, err := aes.NewCipher(es.key)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	if _, err := io.ReadFull(rand.Reader, es.nonce); err != nil {
-		panic(err.Error())
-	}
-
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	ciphertext := aesgcm.Seal(nil, es.nonce, data, nil)
-	return ciphertext, nil
-}
-
-func (es *EncryptionStore) Decrypt(data []byte) ([]byte, error) {
-
-	block, err := aes.NewCipher(es.key)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	plaintext, err := aesgcm.Open(nil, es.nonce, data, nil)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	return plaintext, nil
 }

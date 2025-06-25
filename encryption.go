@@ -1,40 +1,31 @@
 package main
 
 import (
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"io"
-
-	"github.com/google/uuid"
 )
 
-type EncryptionStore struct {
+type EncryptionUtil struct {
 	key   []byte
 	nonce []byte
 }
 
-func NewEncryptionStore() *EncryptionStore {
+func NewEncryptionStore() *EncryptionUtil {
 
-	key := []byte(uuid.NewString())
+	key := make([]byte, 32)
 	// Never use more than 2^32 random nonces with a given key because of the risk of a repeat.
 	nonce := make([]byte, 12)
 
-	return &EncryptionStore{
+	return &EncryptionUtil{
 		key:   key,
 		nonce: nonce,
 	}
 }
 
-func (es *EncryptionStore) Encrypt(ctx context.Context, data []byte) ([]byte, error) {
+func (es *EncryptionUtil) Encrypt(data []byte) ([]byte, error) {
 
 	block, err := aes.NewCipher(es.key)
 	if err != nil {
-		panic(err.Error())
-	}
-
-	if _, err := io.ReadFull(rand.Reader, es.nonce); err != nil {
 		panic(err.Error())
 	}
 
@@ -47,7 +38,7 @@ func (es *EncryptionStore) Encrypt(ctx context.Context, data []byte) ([]byte, er
 	return ciphertext, nil
 }
 
-func (es *EncryptionStore) Decrypt(ctx context.Context, data []byte) ([]byte, error) {
+func (es *EncryptionUtil) Decrypt(data []byte) ([]byte, error) {
 
 	block, err := aes.NewCipher(es.key)
 	if err != nil {
