@@ -171,7 +171,7 @@ func (b *backend) pathAuthLogin(_ context.Context, req *logical.Request, d *fram
 				"fruit": "banana",
 			},
 			LeaseOptions: logical.LeaseOptions{
-				TTL:       30 * time.Second,
+				TTL:       5 * time.Minute,
 				MaxTTL:    60 * time.Minute,
 				Renewable: true,
 			},
